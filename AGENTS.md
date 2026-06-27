@@ -72,6 +72,7 @@ README.md            public overview and development notes
 bin/                 helper scripts, committed; read each script's header before first use
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
 config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "default" = same as firstmate
+config/crew-backend  crewmate terminal backend override; LOCAL, gitignored; absent/"default"/"tmux" = tmux, "herdr" = herdr backend (dispatched by bin/fm-backend-lib.sh)
 config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
