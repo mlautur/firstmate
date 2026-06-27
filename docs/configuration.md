@@ -43,6 +43,14 @@ claude, codex, opencode, and pi are all empirically verified; new harnesses get 
 The verified adapter knowledge - busy signatures, interrupt and exit commands, skill-invocation syntax, and per-harness quirks - lives in [`.agents/skills/harness-adapters/SKILL.md`](../.agents/skills/harness-adapters/SKILL.md).
 Launch mechanics, including the verified command templates, live in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh).
 
+## Crew backend (config/crew-backend)
+
+The local, gitignored `config/crew-backend` file selects which terminal-multiplexer backend firstmate drives crewmate panes through, mirroring the `config/crew-harness` pattern.
+Absent, `default`, or `tmux` all select the tmux backend ([`bin/fm-tmux-lib.sh`](../bin/fm-tmux-lib.sh)); `herdr` selects the herdr backend ([`bin/fm-herdr-lib.sh`](../bin/fm-herdr-lib.sh)).
+[`bin/fm-backend-lib.sh`](../bin/fm-backend-lib.sh) is the dispatcher: it resolves the name (`FM_CREW_BACKEND` env override wins, then the file, then the default), sources exactly one backend lib behind the stable `fm_be_*` seam, and fails the source loudly on an unknown name.
+The default tmux backend is a drop-in for a direct source of `fm-tmux-lib.sh`, so leaving this unset changes no behavior.
+The herdr backend is a stub at this stage of the tmux->herdr migration: selecting it loads cleanly and then fails loudly the moment any pane primitive is called.
+
 ## Toolchain
 
 On first launch the first mate detects what its required toolchain is missing or too old (tmux, node, gh, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi), lists it with the exact install commands, and installs only after you say go.
@@ -92,6 +100,7 @@ FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
 FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
 FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
 FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
+FM_CREW_BACKEND=        # crew terminal backend override; beats config/crew-backend; absent/default/tmux = tmux, herdr = herdr stub
 FM_POLL=15              # seconds between watcher poll cycles
 FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap

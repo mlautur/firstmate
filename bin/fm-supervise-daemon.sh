@@ -103,11 +103,13 @@ FM_DAEMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_DAEMON_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
-# Shared tmux pane primitives (busy/composer detection + verify-retry submit).
-# Sourced at top level so BOTH the executed daemon and the unit tests (which
-# source this file for its pure functions) get the corrected composer detection.
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$FM_DAEMON_DIR/fm-tmux-lib.sh"
+# Shared crew pane primitives (busy/composer detection + verify-retry submit),
+# loaded via the backend dispatcher (config/crew-backend; default tmux loads
+# bin/fm-tmux-lib.sh unchanged). Sourced at top level so BOTH the executed daemon
+# and the unit tests (which source this file for its pure functions) get the
+# corrected composer detection.
+# shellcheck source=bin/fm-backend-lib.sh
+. "$FM_DAEMON_DIR/fm-backend-lib.sh"
 
 # Shared wake classifier (last_status_line, status_is_captain_relevant,
 # window_to_task, scan_captain_relevant_statuses). The SAME library backs the

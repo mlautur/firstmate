@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# fm-tmux-lib.sh — shared tmux pane primitives for firstmate.
+# fm-tmux-lib.sh — the tmux backend behind firstmate's crew-pane seam.
+#
+# This is the tmux implementation of the backend interface dispatched by
+# bin/fm-backend-lib.sh (config/crew-backend = absent/default/tmux). It defines
+# the stable fm_be_* seam at the bottom of this file, plus the historical
+# fm_tmux_*/fm_pane_* primitives current call sites still call directly. The
+# herdr backend (bin/fm-herdr-lib.sh, filled in migration slice 3) implements the
+# same fm_be_* interface; see data/herdr-migration-scout-h1/report.md §4.
 #
 # ONE source of truth for: busy detection, composer-empty (pending-input)
 # detection, and a verify-and-retry-Enter submit. Sourced by both the away-mode
-# daemon (bin/fm-supervise-daemon.sh) and bin/fm-send.sh so the composer/submit
-# logic cannot drift between the two.
+# daemon (bin/fm-supervise-daemon.sh) and bin/fm-send.sh (through the dispatcher)
+# so the composer/submit logic cannot drift between the two.
 #
 # Why this exists (incident afk-invx-i5): the daemon's old composer check only
 # recognized a BARE prompt glyph ("> ") as an empty composer. claude draws its
@@ -189,4 +196,135 @@ fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
   fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
+}
+
+# ============================================================================
+# Backend seam (fm_be_*) — tmux implementation.
+#
+# The stable interface every backend provides (dispatched by bin/fm-backend-lib.sh;
+# the herdr stub mirrors these signatures in bin/fm-herdr-lib.sh). The tmux
+# backend implements it by reusing the primitives above plus the inline tmux calls
+# that today live in fm-spawn.sh, fm-peek.sh, fm-send.sh and fm-teardown.sh. Slice
+# 1 only DEFINES this seam (and keeps every historical name above working); moving
+# those call sites onto fm_be_* is later slices, so each function below is a
+# behavior-preserving equivalent of today's inline tmux usage.
+#
+# Handle model (tmux): a window is addressed as "session:window" (e.g.
+# "firstmate:fm-foo"); that string is the opaque handle stored in
+# state/<id>.meta window= and is what every fm_be_* below accepts.
+# ============================================================================
+
+# fm_be_create_window <id> <cwd> <label> -> echoes handle (session:window).
+# Mirror fm-spawn.sh's session/window creation: reuse firstmate's current tmux
+# session when inside tmux, else a dedicated detached "firstmate" session; create
+# a detached window named <label> at <cwd>; refuse a duplicate window name. <id>
+# is accepted for interface parity (the herdr backend names by agent id); the
+# tmux backend addresses by <label>.
+fm_be_create_window() {  # <id> <cwd> <label>
+  local cwd=$2 label=$3 ses
+  if [ -n "${TMUX:-}" ]; then
+    ses=$(tmux display-message -p '#S') || return 1
+  else
+    tmux has-session -t firstmate 2>/dev/null || tmux new-session -d -s firstmate || return 1
+    ses=firstmate
+  fi
+  if tmux list-windows -t "$ses" -F '#{window_name}' 2>/dev/null | grep -qx "$label"; then
+    printf 'fm_be_create_window: window %s:%s already exists\n' "$ses" "$label" >&2
+    return 1
+  fi
+  tmux new-window -d -t "$ses" -n "$label" -c "$cwd" || return 1
+  printf '%s:%s' "$ses" "$label"
+}
+
+# fm_be_window_exists <handle|label> -> 0 if a matching window exists, else 1.
+fm_be_window_exists() {  # <handle|label>
+  case "$1" in
+    *:*) tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null \
+           | grep -qx "$1" ;;
+    *)   tmux list-windows -a -F '#{window_name}' 2>/dev/null | grep -qx "$1" ;;
+  esac
+}
+
+# fm_be_resolve <name|handle> -> echoes a session:window handle, or fails.
+# A bare window name resolves via `tmux list-windows -a` (matches fm-peek/fm-send);
+# an already-qualified session:window passes through unchanged.
+fm_be_resolve() {  # <name|handle>
+  case "$1" in
+    *:*) printf '%s' "$1" ;;
+    *)   tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null \
+           | grep -m1 ":$1\$" || return 1 ;;
+  esac
+}
+
+# fm_be_run_cmd <handle> <cmd>: type a shell command and submit it (command + Enter).
+fm_be_run_cmd() {  # <handle> <cmd>
+  tmux send-keys -t "$1" "$2" Enter
+}
+
+# fm_be_send_text <handle> <text>: type literal text, no Enter.
+fm_be_send_text() {  # <handle> <text>
+  tmux send-keys -t "$1" -l "$2"
+}
+
+# fm_be_send_key <handle> <key...>: send one or more named keys (Enter/Escape/C-c).
+fm_be_send_key() {  # <handle> <key...>
+  local handle=$1
+  shift
+  tmux send-keys -t "$handle" "$@"
+}
+
+# fm_be_submit_verify <handle> <text> <retries> <enter-sleep> <settle>
+#   -> empty|pending|unknown|send-failed   (the verify-and-retry submit contract).
+fm_be_submit_verify() {  # <handle> <text> <retries> <enter-sleep> <settle>
+  fm_tmux_submit_core "$@"
+}
+
+# fm_be_capture <handle> <lines> [ansi]: echo the last <lines> rows of the pane.
+# With a non-empty third arg, preserve ANSI styling (tmux -e, for the ghost-text
+# path); otherwise a plain capture (the peek/busy analog).
+fm_be_capture() {  # <handle> <lines> [ansi]
+  if [ -n "${3:-}" ]; then
+    tmux capture-pane -e -p -t "$1" -S -"$2"
+  else
+    tmux capture-pane -p -t "$1" -S -"$2"
+  fi
+}
+
+# fm_be_pane_alive <handle> -> 0 if the handle resolves to a live pane, else 1.
+fm_be_pane_alive() {  # <handle>
+  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1
+}
+
+# fm_be_pane_cwd <handle> -> echo the pane's current working directory.
+fm_be_pane_cwd() {  # <handle>
+  tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
+}
+
+# fm_be_agent_status <handle> -> idle|working|none   (tmux best-effort).
+# Derive a unified agent state from the tmux-native signals firstmate already
+# uses, so later slices can read ONE function regardless of backend:
+#   working - the busy signature is present in the pane footer (agent mid-turn).
+#   idle    - the pane is readable and NOT busy.
+#   none    - the handle does not resolve to a live pane.
+# tmux has NO native source for "done" or "blocked" — those come from the
+# crewmate status file and per-harness turn-end hooks, not the pane — so the tmux
+# backend never returns them. The herdr backend, reading herdr's native per-pane
+# agent_status, supplies done/blocked/unknown directly. This is the unifying read
+# that replaces inline busy-regex + pane-hash checks in later slices.
+fm_be_agent_status() {  # <handle>
+  fm_be_pane_alive "$1" || { printf 'none'; return 0; }
+  if fm_pane_is_busy "$1"; then
+    printf 'working'; return 0
+  fi
+  printf 'idle'; return 0
+}
+
+# fm_be_kill_window <handle>: tear down the window/pane (teardown path).
+fm_be_kill_window() {  # <handle>
+  tmux kill-window -t "$1"
+}
+
+# fm_be_composer_state <handle> -> empty|pending|unknown   (ghost-text aware).
+fm_be_composer_state() {  # <handle>
+  fm_tmux_composer_state "$1"
 }

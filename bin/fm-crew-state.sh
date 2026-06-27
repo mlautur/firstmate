@@ -42,8 +42,10 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$SCRIPT_DIR/fm-tmux-lib.sh"
+# Crew pane primitives, via the backend dispatcher (config/crew-backend; default
+# tmux). Loads bin/fm-tmux-lib.sh unchanged for the tmux backend.
+# shellcheck source=bin/fm-backend-lib.sh
+. "$SCRIPT_DIR/fm-backend-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
