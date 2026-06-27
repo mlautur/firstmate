@@ -29,7 +29,9 @@ Each file also starts with a short header comment.
 | `fm-wake-lib.sh`         | Shared durable wake queue and portable lock helpers sourced by the watcher, drain, arm, guard, and daemon          |
 | `fm-classify-lib.sh`     | Shared captain-relevant wake classifier sourced by the watcher and sub-supervisor daemon                           |
 | `fm-send.sh`             | Send one verified literal line (or `--key Escape`) to a direct-report window; exits non-zero on confirmed swallowed Enter; bare `kind=secondmate` targets are marked as from-firstmate; slash commands and codex `$...` skill invocations get popup-settle before Enter; text sends pause `FM_SEND_SETTLE` seconds after success |
-| `fm-tmux-lib.sh`         | Shared tmux pane primitives for busy detection, dim-ghost-aware and border-aware composer detection, and verified submit retry |
+| `fm-backend-lib.sh`      | Crew terminal-backend dispatcher selected by `config/crew-backend` (env `FM_CREW_BACKEND`; default `tmux`); sources exactly one backend lib behind the stable `fm_be_*` seam and fails the source loudly on an unknown name |
+| `fm-tmux-lib.sh`         | tmux backend behind the crew-pane seam: busy detection, dim-ghost-aware and border-aware composer detection, verified submit retry, plus the `fm_be_*` implementation |
+| `fm-herdr-lib.sh`        | herdr backend stub for the tmux->herdr migration; defines the full `fm_be_*` seam and historical names so selecting it loads cleanly and then fails loudly the moment any primitive is used |
 | `fm-peek.sh`             | Print a bounded tail of a crewmate pane                                                                             |
 | `fm-pr-check.sh`         | Record `pr=` and a verified `pr_head=` when available for a PR-ready task, then arm the watcher's merge poll        |
 | `fm-promote.sh`          | Promote a scout task in place so it becomes a protected ship task                                                   |
