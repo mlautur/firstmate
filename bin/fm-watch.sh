@@ -36,6 +36,10 @@ mkdir -p "$STATE"
 # the backend seam while staying byte-identical on the tmux backend.
 # shellcheck source=bin/fm-backend-lib.sh
 . "$SCRIPT_DIR/fm-backend-lib.sh"
+# The selected backend (tmux default, or herdr). Used to gate the herdr-only
+# turn-end synthesis below; every other wake decision flows through the fm_be_*
+# seam regardless of backend.
+BACKEND=$(fm_backend_name)
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -161,6 +165,39 @@ recorded_windows() {
     seen="$seen|$w|"
     printf '%s\n' "$w"
   done
+}
+
+# herdr turn-end synthesis. Under the herdr backend there is no per-task
+# .turn-ended hook (fm-spawn skips it because herdr reports a native turn-end), so
+# the watcher derives the turn-end signal from the agent_status LEVEL it already
+# polls each cycle: when a window leaves "working" for a resting state (herdr's
+# synthesized "done", or a working->idle boundary), touch state/<id>.turn-ended so
+# the SAME scan_signals coalescing/triage path handles it exactly as a tmux hook
+# would (a bare turn-end is benign and absorbed; it only matters coalesced with a
+# captain-relevant .status write). The LEVEL is read via fm_be_agent_status, never
+# `herdr wait`, which is edge-triggered and would miss an already-in-state pane
+# (report §2e). The last seen status is remembered in .agent-status-<key> so the
+# marker is touched once per transition, not every poll - no turn-end storm on a
+# quiet idle crew. "blocked" is NOT a turn-end: it is a needs-attention level the
+# crewmate already surfaces through its .status channel, so it is left alone here.
+# tmux is unaffected - it keeps its per-task .turn-ended hook and this function is
+# never called for the tmux backend.
+herdr_synthesize_turnend() {  # <window-handle>
+  local w=$1 cur prev key af task
+  cur=$(fm_be_agent_status "$w")
+  key=$(printf '%s' "$w" | tr ':/.' '___')
+  af="$STATE/.agent-status-$key"
+  prev=$(cat "$af" 2>/dev/null || true)
+  [ "$cur" = "$prev" ] && return 0
+  printf '%s' "$cur" > "$af"
+  case "$cur" in
+    done) ;;                                    # herdr's synthesized turn-end
+    idle) [ "$prev" = working ] || return 0 ;;  # only the working->idle boundary
+    *) return 0 ;;                              # working/blocked/unknown/none: no turn-end
+  esac
+  task=$(window_to_task "$w" "$STATE")
+  [ -n "$task" ] || return 0
+  touch "$STATE/$task.turn-ended" 2>/dev/null || true
 }
 
 # Exit reporting a wake. Consecutive heartbeats with no other wake in between
@@ -363,6 +400,11 @@ EOF
     # A secondmate idling on its own watcher is healthy. Its parent supervises
     # it through status writes and heartbeats, not pane-idle staleness.
     [ "$(window_kind "$w")" = secondmate ] && continue
+    # herdr: derive the turn-end signal from the native agent_status level (there
+    # is no per-task .turn-ended hook under herdr). tmux keeps its own hook, so
+    # this is gated off for the tmux backend - secondmate windows are skipped
+    # above, matching fm-spawn's no-hook-for-secondmates rule.
+    [ "$BACKEND" = herdr ] && herdr_synthesize_turnend "$w"
     tail40=$(fm_be_capture "$w" 40 2>/dev/null) || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     key=$(printf '%s' "$w" | tr ':/.' '___')
@@ -380,7 +422,10 @@ EOF
       # every verified harness renders its busy indicator - so busy-looking strings
       # in displayed content cannot suppress stale detection). Not-working (idle or
       # a vanished pane) means no busy signature, exactly as the inline regex did.
-      if [ "$n" -ge 2 ] && [ "$(fm_be_agent_status "$w")" != working ]; then
+      # "blocked" (a herdr-native level; tmux never returns it) is also excluded:
+      # a blocked crew is awaiting attention, not wedged, and is surfaced via its
+      # .status channel, so it must not trip false-stale detection.
+      if [ "$n" -ge 2 ] && { wstat=$(fm_be_agent_status "$w"); [ "$wstat" != working ] && [ "$wstat" != blocked ]; }; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
         # firstmate. Detection itself is unchanged from above.
         if afk_present; then
@@ -396,7 +441,7 @@ EOF
             fm_wake_append stale "$w" "stale: $w" || exit 1
             printf '%s' "$h" > "$sf"
             rm -f "$ssf"
-            mark_surfaced "$STATE/$(window_to_task "$w").status"
+            mark_surfaced "$STATE/$(window_to_task "$w" "$STATE").status"
             wake "stale: $w"
           fi
         else
