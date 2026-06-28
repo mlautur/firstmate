@@ -358,12 +358,18 @@ fm_be_pane_alive() {  # <handle>
 }
 
 # fm_be_pane_cwd <handle> -> echo the pane's current working directory.
-# Prefer .cwd, fall back to .foreground_cwd (both verified to report a worktree
-# path — report §2d), so the spawn worktree-isolation guard reads the same value
-# it reads from tmux's #{pane_current_path}.
+# Prefer .foreground_cwd, fall back to .cwd. The pane's base .cwd is its login
+# shell's directory and does NOT move when `treehouse get` opens a subshell into a
+# worktree; the active subshell's directory is reported in .foreground_cwd. To
+# match tmux's #{pane_current_path} (which returns the *active process's* cwd, i.e.
+# the worktree), this must read .foreground_cwd first — otherwise the spawn
+# worktree-detection wait loop and the isolation guard misread the unchanged login
+# cwd and never see the worktree. Verified live against herdr 0.7.0: after a
+# `treehouse get` subshell, .cwd stays the project dir while .foreground_cwd is the
+# worktree path. Falls back to .cwd for panes with no foreground subshell.
 fm_be_pane_cwd() {  # <handle>
   "$FM_HERDR_BIN" pane get "$1" 2>/dev/null \
-    | jq -r '.result.pane | (.cwd // .foreground_cwd // empty)' 2>/dev/null
+    | jq -r '.result.pane | (.foreground_cwd // .cwd // empty)' 2>/dev/null
 }
 
 # fm_be_agent_status <handle> -> idle|working|blocked|done|unknown|none.
