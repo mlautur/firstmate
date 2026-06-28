@@ -30,9 +30,24 @@ status_is_captain_relevant() {
   printf '%s' "$line" | grep -qiE "${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT}"
 }
 
-# task id from a tmux window name "<session>:fm-<id>" -> "<id>"
-window_to_task() {
-  local w=$1 t
+# task id for a window handle. The tmux handle "<session>:fm-<id>" encodes the id
+# in its name; a herdr handle is an opaque pane_id ("wN:pM") that does NOT, so
+# when a state dir is given this first reverse-looks-up the meta whose window=
+# matches the handle and returns that meta's task id (the basename). The meta
+# lookup is authoritative for BOTH backends - a tmux window's meta carries the
+# same id the string parse would yield - and falls back to the
+# "<session>:fm-<id>" string parse when no state dir is given or no meta matches,
+# so existing tmux callers stay byte-identical.
+window_to_task() {  # <window> [state]
+  local w=$1 state=${2:-} meta mw t
+  if [ -n "$state" ]; then
+    for meta in "$state"/*.meta; do
+      [ -e "$meta" ] || continue
+      mw=$(grep '^window=' "$meta" 2>/dev/null | cut -d= -f2- || true)
+      [ "$mw" = "$w" ] || continue
+      t=$(basename "$meta"); printf '%s' "${t%.meta}"; return 0
+    done
+  fi
   t="${w##*:}"; t="${t#fm-}"; printf '%s' "$t"
 }
 
@@ -59,7 +74,7 @@ signal_reason_is_actionable() {  # <file> ...
 # but the caller bounds it with an idle-time escalation threshold.
 stale_is_terminal() {  # <window> <state>
   local win=$1 state=$2 last
-  last=$(last_status_line "$state/$(window_to_task "$win").status")
+  last=$(last_status_line "$state/$(window_to_task "$win" "$state").status")
   [ -n "$last" ] && status_is_captain_relevant "$last"
 }
 

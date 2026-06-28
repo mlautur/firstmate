@@ -246,15 +246,24 @@ _collapse_newlines() {  # <text>
 
 # Auto-discover the supervisor pane at startup. Priority:
 #   1. FM_SUPERVISOR_TARGET env (explicit override) — caller passes it in.
-#   2. $TMUX_PANE — tmux sets this in every pane's environment; inherited by
+#   2. $HERDR_PANE_ID — herdr sets this in every pane's environment (the herdr
+#      analogue of $TMUX_PANE); used only when the herdr backend is active.
+#   3. $TMUX_PANE — tmux sets this in every pane's environment; inherited by
 #      the daemon when the /afk skill launches it from firstmate's own pane.
-#   3. firstmate:0 — legacy fallback (may not resolve if the session is named
+#   4. firstmate:0 — legacy fallback (may not resolve if the session is named
 #      differently). The caller logs a warning in that case.
 # Returns the resolved target on stdout; returns 1 if only the fallback is left
 # AND the fallback does not resolve to a live pane.
 discover_supervisor_target() {
   if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
     printf '%s' "$FM_SUPERVISOR_TARGET"
+    return 0
+  fi
+  # Under herdr the supervisor pane is identified by $HERDR_PANE_ID (herdr sets it
+  # in every pane's env, the analogue of tmux's $TMUX_PANE), so it takes priority
+  # over $TMUX_PANE when the herdr backend is active.
+  if [ "$(fm_backend_name)" = herdr ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    printf '%s' "$HERDR_PANE_ID"
     return 0
   fi
   if [ -n "${TMUX_PANE:-}" ]; then
@@ -311,7 +320,7 @@ classify_signal() {  # <reason-after-colon> <state>
 # timestamp marker; persistence is escalated by housekeeping's recheck, not here.
 classify_stale() {  # <window> <state>
   local win=$1 state=$2 task last seen
-  task=$(window_to_task "$win")
+  task=$(window_to_task "$win" "$state")
   last=$(last_status_line "$state/$task.status")
   if [ -n "$last" ] && status_is_captain_relevant "$last"; then
     # Dedupe against the signal path: if this status was already escalated
@@ -354,14 +363,14 @@ _stale_key() { printf '%s' "$1" | tr ':/.' '___'; }
 
 stale_marker_record() {  # <window> <state>  — create if absent
   local win=$1 state=$2 key marker
-  key=$(_stale_key "$(window_to_task "$win")")
+  key=$(_stale_key "$(window_to_task "$win" "$state")")
   marker="$state/.subsuper-stale-$key"
   [ -e "$marker" ] || _now > "$marker"
 }
 
 stale_marker_remove() {  # <window> <state>
   local win=$1 state=$2 key
-  key=$(_stale_key "$(window_to_task "$win")")
+  key=$(_stale_key "$(window_to_task "$win" "$state")")
   rm -f "$state/.subsuper-stale-$key"
 }
 
@@ -390,7 +399,7 @@ mark_escalated_seen() {  # <kind> <arg> <state>
         mark_status_seen "$state" "$task" "$last"
       done ;;
     stale)
-      task=$(window_to_task "$arg")
+      task=$(window_to_task "$arg" "$state")
       last=$(last_status_line "$state/$task.status")
       [ -n "$last" ] && status_is_captain_relevant "$last" \
         && mark_status_seen "$state" "$task" "$last" ;;
@@ -454,7 +463,12 @@ inject_wedge_alarm() {  # <state> <age-seconds>
     cat "$state/.subsuper-escalations" 2>/dev/null
   } > "$marker" 2>/dev/null || true
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
-  tmux display-message -t "$target" "fm: away-mode escalations WEDGED ${age}s — see $marker" 2>/dev/null || true
+  # Flash the supervisor client's status line (tmux only - this is a cosmetic
+  # tmux nicety; under herdr the durable marker file above is the signal, and
+  # recovery surfaces it). The marker + preserved buffer are the real guarantees.
+  if [ "$(fm_backend_name)" = tmux ]; then
+    tmux display-message -t "$target" "fm: away-mode escalations WEDGED ${age}s — see $marker" 2>/dev/null || true
+  fi
 }
 
 _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first arrived (sidecar epoch)
@@ -521,7 +535,7 @@ housekeeping() {  # <state>
     [ "$age" -ge "${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}" ] || continue
     # Reconstruct the window name from the key (best-effort: session is unknown,
     # so probe the live fm-* windows for one whose task matches).
-    win=$(window_for_task "$key" 2>/dev/null || true)
+    win=$(window_for_task "$key" "$state" 2>/dev/null || true)
     if [ -z "$win" ]; then
       # Window gone (task torn down): drop the marker, nothing to escalate.
       rm -f "$marker"; continue
@@ -551,11 +565,25 @@ housekeeping() {  # <state>
   fi
 }
 
-# Find a live fm-* window whose task id matches the given marker key.
-window_for_task() {  # <task-key>
-  local key=$1 w t
+# Find the window handle whose task id matches the given marker key. Under herdr
+# the live "window" is an opaque pane_id that does NOT encode the task id, so
+# enumerate meta (the backend-independent fleet list, the same source the watcher
+# uses in recorded_windows) instead of scraping tmux window names; the tmux path
+# is kept exactly as before so the tmux backend stays byte-identical.
+window_for_task() {  # <task-key> <state>
+  local key=$1 state=$2 w t meta task
+  if [ "$(fm_backend_name)" = herdr ]; then
+    for meta in "$state"/*.meta; do
+      [ -e "$meta" ] || continue
+      task=$(basename "$meta"); task="${task%.meta}"
+      [ "$(_stale_key "$task")" = "$key" ] || continue
+      w=$(grep '^window=' "$meta" 2>/dev/null | cut -d= -f2- || true)
+      [ -n "$w" ] && { printf '%s' "$w"; return 0; }
+    done
+    return 1
+  fi
   for w in $(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true); do
-    t=$(window_to_task "$w")
+    t=$(window_to_task "$w" "$state")
     [ "$(_stale_key "$t")" = "$key" ] && { printf '%s' "$w"; return 0; }
   done
   return 1
@@ -594,7 +622,7 @@ inject_msg() {  # <message> [state]
   msg=$(_collapse_newlines "$msg")
   msg="${FM_INJECT_MARK}${msg}"
   target="${FM_SUPERVISOR_TARGET:-$FM_SUPERVISOR_TARGET_DEFAULT}"
-  tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1 || return 1
+  fm_be_pane_alive "$target" || return 1
   # (3) Busy-guard: never inject into an in-use pane. Two checks:
   #   a) pane_is_busy: the harness shows a busy footer (agent mid-turn).
   #   b) pane_input_pending: the cursor line has real unsubmitted text after
@@ -747,7 +775,9 @@ fm_super_main() {
   local discovered target_source
   target_source="FM_SUPERVISOR_TARGET"
   if [ -z "${FM_SUPERVISOR_TARGET:-}" ]; then
-    if [ -n "${TMUX_PANE:-}" ]; then
+    if [ "$(fm_backend_name)" = herdr ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+      target_source="HERDR_PANE_ID"
+    elif [ -n "${TMUX_PANE:-}" ]; then
       target_source="TMUX_PANE"
     else
       target_source="FALLBACK(firstmate:0)"
@@ -762,8 +792,8 @@ fm_super_main() {
   local TARGET="$FM_SUPERVISOR_TARGET"
 
   # --- validate supervisor target at startup (a missing target is a typo) ---
-  if ! tmux display-message -p -t "$TARGET" '#{pane_id}' >/dev/null 2>&1; then
-    echo "error: supervisor target '$TARGET' does not resolve to a tmux pane; set FM_SUPERVISOR_TARGET" >&2
+  if ! fm_be_pane_alive "$TARGET"; then
+    echo "error: supervisor target '$TARGET' does not resolve to a live pane; set FM_SUPERVISOR_TARGET" >&2
     log "startup failed: target '$TARGET' not found"
     fm_lock_release "$LOCK" 2>/dev/null || true
     rm -f "$PIDFILE" 2>/dev/null || true
@@ -828,7 +858,7 @@ fm_super_main() {
     # has nowhere to go, and firstmate itself is the consumer of escalations.
     # Catch-up signals persist in state/*.status and flow on the next run, so
     # this delays rather than loses work.
-    if ! tmux display-message -p -t "$TARGET" '#{pane_id}' >/dev/null 2>&1; then
+    if ! fm_be_pane_alive "$TARGET"; then
       log "warn: supervisor target '$TARGET' gone; backing off ${INJECT_FAIL_SLEEP}s, will retry"
       # Flush is pointless with no pane; preserve any buffered escalations.
       sleep "$INJECT_FAIL_SLEEP"

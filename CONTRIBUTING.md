@@ -83,6 +83,7 @@ tests/fm-crew-state.test.sh               # fm-crew-state.sh current-state recon
 tests/fm-backend-dispatch.test.sh         # crew backend dispatcher: config/crew-backend selection, FM_CREW_BACKEND override, default/tmux seam wiring, herdr backend selection + full seam exposure, unknown-backend rejection, fm_be_agent_status mapping
 tests/fm-herdr-backend.test.sh            # herdr backend fm_be_* implementation against a fake herdr CLI: native agent_status mapping, pane cwd/alive/busy, window create/resolve/exists, capture format+cap, kill, and submit-verify tokens; live round-trip gated behind FM_HERDR_LIVE=1
 tests/fm-spawn-herdr.test.sh              # fm-spawn.sh on the herdr backend (fake herdr CLI): pane_id handle recorded in meta window=, treehouse-get/brief sends routed through the seam, and the turn-end hook skip-when-integration-current gate vs defensive fallback; tmux default path unchanged
+tests/fm-herdr-supervision.test.sh        # watcher + away-mode daemon herdr wake mapping (fake herdr CLI): window_to_task/window_for_task meta reverse-lookup for opaque pane_id handles, HERDR_PANE_ID supervisor target, turn-end synthesized once per agent_status transition (done / working->idle), and blocked-is-not-stale
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVERRIDE="$tmp" FM_SIGNAL_GRACE=1 FM_POLL=1 FM_HEARTBEAT=999999 bin/fm-watch-arm.sh  # watcher re-arm smoke test (prints arm status, then an actionable signal)
