@@ -211,19 +211,25 @@ fm_pane_is_busy() {  # <target>
 
 # fm_tmux_submit_enter_core: submit with Enter and verify the turn began, retrying
 # Enter ONLY (never retyping). Primary signal is the native agent_status reaching
-# working/done/blocked (the turn started — report §2b); the composer read is a
-# fallback for panes without a reporting integration. Echoes the tmux contract
-# verdict (empty|pending|unknown|send-failed): "empty" == landed.
+# working (the idle->working transition that means the turn just started — report
+# §2b); done and blocked are persistent/parked levels that can already be present
+# before the Enter is processed, so they are NOT treated as landed — they fall
+# through to the composer read, which directly verifies the submit by checking
+# whether the composer cleared. The composer read is also the fallback for panes
+# without a reporting integration. Echoes the tmux contract verdict
+# (empty|pending|unknown|send-failed): "empty" == landed.
 fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
   local target=$1 retries=$2 sleep_s=$3 i=0 st cs
   while :; do
     fm_be_send_key "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
     # Primary (semantic): did the agent's turn begin? Edge-tolerant LEVEL read —
-    # never `herdr wait agent-status`, which is edge-triggered (report §2e).
+    # never `herdr wait agent-status`, which is edge-triggered (report §2e). Only
+    # `working` is a positive turn-began signal; done/blocked/idle/unknown/none
+    # fall through to the ghost-aware composer check below.
     st=$(fm_be_agent_status "$target")
     case "$st" in
-      working|done|blocked) printf 'empty'; return 0 ;;
+      working) printf 'empty'; return 0 ;;
     esac
     # Fallback: inspect the composer (best-effort, ghost-aware).
     cs=$(fm_tmux_composer_state "$target")

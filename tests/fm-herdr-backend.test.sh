@@ -297,6 +297,17 @@ test_submit_verify() {
          export FM_HOME="$home" PATH="$fb:$PATH" FM_FAKE_STATUS=idle FM_FAKE_TEXT='still typing here'
          . "$DISPATCH" >/dev/null 2>&1; fm_be_submit_verify w1:p2 hi 2 0.02 0.01 )
   [ "$got" = pending ] || fail "idle + leftover composer should yield pending, got '$got'"
+
+  # A pre-existing done/blocked level is NOT a turn-began signal: a crewmate
+  # already parked at done/blocked with leftover composer text must fall through
+  # to the composer check and report pending, not falsely confirm a swallowed
+  # Enter as empty.
+  for s in 'done' blocked; do
+    got=$( unset FM_CREW_BACKEND
+           export FM_HOME="$home" PATH="$fb:$PATH" FM_FAKE_STATUS="$s" FM_FAKE_TEXT='still typing here'
+           . "$DISPATCH" >/dev/null 2>&1; fm_be_submit_verify w1:p2 hi 2 0.02 0.01 )
+    [ "$got" = pending ] || fail "$s + leftover composer should yield pending, got '$got'"
+  done
   pass "fm_be_submit_verify returns send-failed|empty|pending per agent_status+composer"
 }
 
