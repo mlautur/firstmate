@@ -102,7 +102,7 @@ state/               volatile runtime signals; gitignored
 ```
 
 Task ids are short kebab slugs with a random suffix, e.g. `fix-login-k3`.
-The tmux window for a task is always named `fm-<id>`.
+The crew-backend window for a task is always named `fm-<id>` - a tmux window by default, or a herdr pane/tab when `config/crew-backend=herdr` (the backend seam, `fm_be_*`, is the same either way).
 
 ## 3. Bootstrap (run at every session start)
 
@@ -157,6 +157,7 @@ Resolve `default` with `bin/fm-harness.sh`; resolve the active crewmate harness 
 
 Each adapter splits into mechanics and knowledge.
 The mechanics (launch command, autonomy flag, turn-end hook) live in `bin/fm-spawn.sh`; the knowledge you need while supervising (busy signature, exit, interrupt, dialogs, quirks, skill invocation, resume) lives in the agent-only `harness-adapters` skill.
+Busy-signature and turn-end are the tmux-backend mechanism; under the herdr crew backend (`config/crew-backend=herdr`) they are replaced by herdr's native per-pane `agent_status` reported by the harness's herdr integration, and `harness-adapters` documents both backends including which integration to install and verify per harness.
 **Never dispatch a crewmate on an unverified adapter.**
 If `config/crew-harness` names an unverified one, tell the captain and fall back to your own harness until it is verified.
 If the captain asks for a new harness, load `harness-adapters`, verify it empirically with a trivial supervised task, then commit the script and knowledge changes.
@@ -509,7 +510,7 @@ Heartbeats back off exponentially while they are the only wakes firing (600s dou
 Due per-task checks run before signal scanning so chatty crewmate status updates cannot starve slow polls like merge detection.
 
 Never rely on hooks or status files alone; when a heartbeat wake does reach you, the review of every window is mandatory and unconditional.
-tmux is the ground truth.
+The crew backend's live panes are the ground truth - tmux by default, herdr when `config/crew-backend=herdr`; read them through the backend seam either way.
 For `kind=secondmate`, an idle pane is healthy.
 A secondmate may be sitting on its own watcher with no visible pane changes, so parent supervision uses status writes plus heartbeat review, not pane-staleness.
 `fm-watch.sh` therefore skips stale-pane wakes for windows whose meta records `kind=secondmate`.
