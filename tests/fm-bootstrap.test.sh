@@ -54,6 +54,65 @@ SH
   printf '%s\n' "$fakebin"
 }
 
+# A fake `herdr` driven by env: FAKE_RUNNING/FAKE_COMPAT (status --json booleans)
+# and FAKE_INTEG (the `integration status` state word for the active harness).
+# Defaults are a healthy server with the claude integration current.
+add_fake_herdr() {
+  local fakebin=$1
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "status --json"|"status server"|"status")
+    printf '{"server":{"running":%s,"compatible":%s}}\n' "${FAKE_RUNNING:-true}" "${FAKE_COMPAT:-true}" ;;
+  "integration status")
+    printf 'claude: %s (/p)\n' "${FAKE_INTEG:-current (v6)}"
+    printf 'codex: not installed (/c)\n' ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$fakebin/herdr"
+}
+
+# Bootstrap's herdr backend dependency/integration check is active ONLY when the
+# resolved crew backend is herdr (here forced via FM_CREW_BACKEND). The default
+# (tmux) backend must require neither herdr nor its integration. crew-harness is
+# pinned to claude so the integration line is deterministic regardless of CI's
+# process ancestry.
+test_herdr_backend_check() {
+  local label backend herdr running compat integ mode expect case_dir fakebin out n
+  n=0
+  while IFS='^' read -r label backend herdr running compat integ mode expect; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    case_dir="$TMP_ROOT/herdr-$n"
+    mkdir -p "$case_dir/home/config"
+    printf '%s\n' claude > "$case_dir/home/config/crew-harness"
+    fakebin=$(make_fake_toolchain "$case_dir")
+    [ "$herdr" = "yes" ] && add_fake_herdr "$fakebin"
+    out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_CREW_BACKEND="$backend" \
+      FAKE_RUNNING="$running" FAKE_COMPAT="$compat" FAKE_INTEG="$integ" \
+      "$ROOT/bin/fm-bootstrap.sh")
+    # Strip the harmless CREW_HARNESS_OVERRIDE line our pinned crew-harness emits.
+    out=$(printf '%s\n' "$out" | grep -v '^CREW_HARNESS_OVERRIDE:' || true)
+    case "$mode" in
+      empty)
+        [ -z "$out" ] || fail "$label: expected no herdr line, got: $out" ;;
+      grep)
+        printf '%s\n' "$out" | grep -F "$expect" >/dev/null || fail "$label: missing '$expect' (got: $out)" ;;
+    esac
+  done <<'ROWS'
+tmux backend never requires herdr (even absent)^tmux^no^true^true^current (v6)^empty^
+herdr backend, healthy server + current integration is silent^herdr^yes^true^true^current (v6)^empty^
+herdr backend, herdr binary absent reports MISSING^herdr^no^true^true^current (v6)^grep^MISSING: herdr (install: brew install herdr
+herdr backend, dead server is a hard stop^herdr^yes^false^true^current (v6)^grep^HERDR: server not running
+herdr backend, incompatible server is a hard stop^herdr^yes^true^false^current (v6)^grep^HERDR: server protocol-incompatible
+herdr backend, missing integration prompts install^herdr^yes^true^true^not installed^grep^HERDR_INTEGRATION: claude
+herdr backend, stale integration prompts install^herdr^yes^true^true^outdated (v5)^grep^HERDR_INTEGRATION: claude
+ROWS
+  pass "bootstrap gates herdr dependency + integration on the active crew backend"
+}
+
 add_tasks_axi() {
   local fakebin=$1 version=$2
   cat > "$fakebin/tasks-axi" <<SH
@@ -137,3 +196,4 @@ ROWS
 
 test_bootstrap_reporting
 test_no_mistakes_min_version
+test_herdr_backend_check

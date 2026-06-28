@@ -8,7 +8,19 @@
 #                 "TASKS_AXI: available", "TANGLE: <remediation>",
 #                 "SECONDMATE_SYNC: secondmate <id>: skipped: <reason>",
 #                 "NUDGE_SECONDMATES: <window-targets...>",
+#                 "HERDR: <server-health remediation>",
+#                 "HERDR_INTEGRATION: <harness> ... (install: herdr integration install <harness>)",
 #                 "FMX: X mode on ..." or "FMX: X mode off ...".
+#          HERDR / HERDR_INTEGRATION lines appear ONLY when the active crew backend
+#          is herdr (config/crew-backend = herdr; absent/default/tmux keeps the tmux
+#          backend and emits neither). When herdr is the backend, the herdr binary
+#          is required (a MISSING line otherwise), its server must be running and
+#          protocol-compatible (a HERDR line otherwise - a hard stop like a dead
+#          tmux server), and the active crewmate harness's herdr integration must be
+#          installed and current (a HERDR_INTEGRATION line otherwise). The
+#          integration line is detect-then-report only: bootstrap never auto-installs
+#          it; firstmate surfaces it for captain consent and runs the printed
+#          one-command fix. A tmux-backend user sees none of this.
 #          A NUDGE_SECONDMATES line lists the RUNNING secondmate windows whose
 #          worktree was fast-forwarded to firstmate's own current default-branch
 #          commit (a purely LOCAL fast-forward, never an origin fetch) AND whose
@@ -127,7 +139,7 @@ secondmate_sync() {
 
 install_cmd() {
   case "$1" in
-    tmux|node|gh|curl|jq) echo "brew install $1  # or the platform's package manager" ;;
+    tmux|node|gh|curl|jq|herdr) echo "brew install $1  # or the platform's package manager" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
@@ -161,6 +173,60 @@ no_mistakes_compatible() {
   [ "$minor" -gt "$NO_MISTAKES_MIN_MINOR" ] && return 0
   [ "$minor" -eq "$NO_MISTAKES_MIN_MINOR" ] || return 1
   [ "$patch" -ge "$NO_MISTAKES_MIN_PATCH" ]
+}
+
+# Resolve the active crew terminal backend. Mirrors fm-backend-lib.sh's
+# fm_backend_name resolver and bootstrap's own crew-harness read above: env
+# override first, then config/crew-backend, then default. absent/default/tmux all
+# normalize to tmux; anything else (e.g. herdr) is echoed verbatim. Re-parsed here
+# rather than sourcing fm-backend-lib.sh, because sourcing it auto-loads a whole
+# backend impl as a side effect just to read one name - disproportionate for a
+# detection pass (the normalization is byte-identical to fm_backend_name).
+crew_backend() {
+  local name="${FM_CREW_BACKEND:-}"
+  if [ -z "$name" ] && [ -f "$CONFIG/crew-backend" ]; then
+    name=$(tr -d '[:space:]' < "$CONFIG/crew-backend" 2>/dev/null || true)
+  fi
+  case "$name" in
+    ''|default|tmux) printf 'tmux' ;;
+    *) printf '%s' "$name" ;;
+  esac
+}
+
+# When the active crew backend is herdr, herdr becomes a hard dependency (like
+# tmux for the tmux backend): the binary must be present, the server running and
+# protocol-compatible, and the active crewmate harness's herdr integration
+# installed+current so herdr reports native per-pane agent_status (see
+# data/herdr-migration-scout-h1/report.md §2d, §3 risks 5/6/9). Detect-then-report
+# only; never auto-install. Silent when herdr is healthy and the integration is
+# current. A tmux-backend instance returns immediately and prints nothing.
+herdr_check() {
+  [ "$(crew_backend)" = herdr ] || return 0
+  if ! command -v herdr >/dev/null 2>&1; then
+    echo "MISSING: herdr (install: $(install_cmd herdr))"
+    return 0
+  fi
+  # Server health: parse the --json booleans (no jq dependency). A missing/empty
+  # response is treated as "not running" - a hard stop, mirroring a dead tmux server.
+  local st
+  st=$(herdr status --json 2>/dev/null || true)
+  if ! printf '%s' "$st" | grep -Eq '"running"[[:space:]]*:[[:space:]]*true'; then
+    echo "HERDR: server not running (start it with: herdr server); the herdr crew backend cannot drive panes without a running server"
+  elif ! printf '%s' "$st" | grep -Eq '"compatible"[[:space:]]*:[[:space:]]*true'; then
+    echo "HERDR: server protocol-incompatible with this herdr client (upgrade/restart herdr: herdr update, then herdr server); the herdr crew backend cannot drive panes"
+  fi
+  # Active crewmate harness integration: must read "current" in `herdr integration
+  # status`. Anything else (not installed / stale) prints one actionable consent
+  # line. Skip silently when the harness is unknown or herdr does not track it.
+  local harness line
+  harness=$("$SCRIPT_DIR/fm-harness.sh" crew 2>/dev/null || true)
+  [ -n "$harness" ] && [ "$harness" != unknown ] || return 0
+  line=$(herdr integration status 2>/dev/null | grep -E "^${harness}:" | head -n1 || true)
+  [ -n "$line" ] || return 0
+  case "$line" in
+    *': current'*) ;;
+    *) echo "HERDR_INTEGRATION: $harness herdr integration not current - native agent_status needs it (install: herdr integration install $harness)" ;;
+  esac
 }
 
 # Write CONTENT to DEST only when it differs, so re-running bootstrap does not
@@ -297,6 +363,7 @@ fi
 crew=
 [ -f "$CONFIG/crew-harness" ] && crew=$(tr -d '[:space:]' < "$CONFIG/crew-harness" || true)
 [ -n "$crew" ] && [ "$crew" != "default" ] && echo "CREW_HARNESS_OVERRIDE: $crew"
+herdr_check
 fm_tasks_axi_compatible && echo "TASKS_AXI: available"
 secondmate_sync
 x_mode_setup

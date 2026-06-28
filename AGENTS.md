@@ -102,7 +102,7 @@ state/               volatile runtime signals; gitignored
 ```
 
 Task ids are short kebab slugs with a random suffix, e.g. `fix-login-k3`.
-The tmux window for a task is always named `fm-<id>`.
+The crew-backend window for a task is always named `fm-<id>` - a tmux window by default, or a herdr pane/tab when `config/crew-backend=herdr` (the backend seam, `fm_be_*`, is the same either way).
 
 ## 3. Bootstrap (run at every session start)
 
@@ -125,6 +125,8 @@ Otherwise it prints one line per problem or capability fact; handle each:
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
 - `TANGLE: <remediation>` - the firstmate primary checkout (the repo root, `FM_ROOT`) is stranded on a feature branch instead of its default branch: a crewmate working firstmate-on-itself branched/committed in the primary instead of its own isolated worktree (section 8). The work is safe on that branch ref; restore the primary to its default branch with the printed `git -C <root> checkout <default>`, then re-validate that branch in a proper worktree. This is the only sanctioned firstmate-initiated git write to the primary, and it is a non-destructive branch switch that strands nothing.
 - `CREW_HARNESS_OVERRIDE: <name>` - record and use the override silently; surface a harness fact only if it actually blocks work or the captain asks.
+- `HERDR: <remediation>` - the active crew backend is herdr (`config/crew-backend=herdr`) but its server is not running or is protocol-incompatible; this is a hard stop like a dead tmux server, because the herdr backend cannot drive panes without it. Relay the problem and run the printed one-line fix (e.g. `herdr server`, or `herdr update` then `herdr server`) before dispatching any work. A herdr binary that is missing entirely is reported as a `MISSING: herdr` line instead. A tmux-backend instance never emits this.
+- `HERDR_INTEGRATION: <harness> ... (install: herdr integration install <harness>)` - the active crewmate harness's herdr integration is not current, so herdr cannot report native per-pane `agent_status`. Detect-then-report only: bootstrap never auto-installs it. Tell the captain with the printed one-command fix, wait for consent, then run it; until it is current, supervision falls back per the `harness-adapters` herdr-backend rules. A tmux-backend instance never emits this.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - bootstrap continued; investigate only if the dirty, diverged, or offline clone blocks work.
 - `SECONDMATE_SYNC: secondmate <id>: skipped: <reason>` - the local-HEAD secondmate sync left a live secondmate home on its existing checkout because the home was dirty, diverged, unsafe, on the wrong branch, missing the primary target commit, or otherwise not fast-forwardable; bootstrap continued, but inspect the reason because the secondmate may be stale after a primary update.
 - `TASKS_AXI: available` - an optional capability fact, not a problem; record it silently and use section 10 for backlog mutations.
@@ -157,6 +159,7 @@ Resolve `default` with `bin/fm-harness.sh`; resolve the active crewmate harness 
 
 Each adapter splits into mechanics and knowledge.
 The mechanics (launch command, autonomy flag, turn-end hook) live in `bin/fm-spawn.sh`; the knowledge you need while supervising (busy signature, exit, interrupt, dialogs, quirks, skill invocation, resume) lives in the agent-only `harness-adapters` skill.
+Busy-signature and turn-end are the tmux-backend mechanism; under the herdr crew backend (`config/crew-backend=herdr`) they are replaced by herdr's native per-pane `agent_status` reported by the harness's herdr integration, and `harness-adapters` documents both backends including which integration to install and verify per harness.
 **Never dispatch a crewmate on an unverified adapter.**
 If `config/crew-harness` names an unverified one, tell the captain and fall back to your own harness until it is verified.
 If the captain asks for a new harness, load `harness-adapters`, verify it empirically with a trivial supervised task, then commit the script and knowledge changes.
@@ -509,7 +512,7 @@ Heartbeats back off exponentially while they are the only wakes firing (600s dou
 Due per-task checks run before signal scanning so chatty crewmate status updates cannot starve slow polls like merge detection.
 
 Never rely on hooks or status files alone; when a heartbeat wake does reach you, the review of every window is mandatory and unconditional.
-tmux is the ground truth.
+The crew backend's live panes are the ground truth - tmux by default, herdr when `config/crew-backend=herdr`; read them through the backend seam either way.
 For `kind=secondmate`, an idle pane is healthy.
 A secondmate may be sitting on its own watcher with no visible pane changes, so parent supervision uses status writes plus heartbeat review, not pane-staleness.
 `fm-watch.sh` therefore skips stale-pane wakes for windows whose meta records `kind=secondmate`.

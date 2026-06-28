@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, and pi.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, and pi, plus the tmux-vs-herdr crew-backend model (busy-signature vs native agent_status, herdr integration install/verify).
 user-invocable: false
 ---
 
@@ -19,6 +19,32 @@ The supervision knowledge lives here: busy signature, exit command, interrupt, d
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` names an unverified adapter, tell the captain and fall back to firstmate's own harness until that adapter is verified.
 If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override, and the verified knowledge here.
+When the active crew backend is herdr (see below), that verification additionally means installing and round-trip-verifying the harness's herdr integration.
+
+## Backend: tmux vs herdr
+
+`config/crew-backend` selects which terminal backend firstmate drives crewmate panes through (resolved by `bin/fm-backend-lib.sh`, env override `FM_CREW_BACKEND`): absent / `default` / `tmux` is the tmux backend; `herdr` is the herdr backend.
+Both backends are fully supported and coexist; the per-harness tables further down hold the knowledge for both, and only the parts noted below differ by backend.
+
+**tmux backend (default).** Busy, idle, and turn-end are derived from each harness's **busy-pane signature** (the regex footers in the tables below) plus a pane-content hash for staleness, and a per-task **turn-end hook** that `fm-spawn` injects per harness. Interrupt keys and dialog accepts are sent with `tmux send-keys`. This is the historical model and the per-harness "Busy-pane signature" / interrupt rows below describe it exactly.
+
+**herdr backend.** herdr reports a **native per-pane `agent_status`** (`idle | working | blocked | done | unknown`) and synthesizes `done` on a working→idle transition. That one field replaces the busy-signature, the pane-hash staleness check, **and** the turn-end hook — but only when the harness's **herdr integration** is installed, because the integration is the per-harness hook that reports `agent_status` to herdr. So under herdr the per-harness knowledge you need is:
+
+- **Install:** `herdr integration install <harness>`.
+- **Verify:** `herdr integration status` shows `<harness>: current`, **and** an empirical `working`→`done` round-trip (dispatch a trivial task, confirm `herdr pane get <pane> .agent_status` goes `working` then `done`).
+- **Standing rule — never dispatch a harness on herdr until its integration is installed AND the `working`→`done` round-trip is empirically verified.** Until then, that harness falls back to terminal-scraping (`herdr agent explain <pane> --json`, herdr's built-in detection rules) or to the harness's ANSI busy-regex (the same busy-signature footers below, matched over `herdr pane read <pane> --format ansi`). This is the herdr-backend form of the "never dispatch on an unverified adapter" rule.
+
+Per-harness herdr integration status (as known today):
+
+| Harness | herdr integration | Notes |
+|---|---|---|
+| claude | **VERIFIED** (integration `current` at v6, `working`→`done` proven live) | native `agent_status` in use |
+| codex | not yet installed/verified | install + round-trip-verify before dispatch, else fall back |
+| opencode | not yet installed/verified | install + round-trip-verify before dispatch, else fall back |
+| pi | not yet installed/verified | install + round-trip-verify before dispatch, else fall back |
+| others | not yet installed/verified | `herdr integration install` supports more harnesses; verify before dispatch |
+
+**Interrupt and trust-dialog handling are the same per-harness facts on both backends; only the transport differs.** Under tmux, send the keys with `tmux send-keys` (what `bin/fm-send.sh` does). Under herdr, send the same keys with `herdr pane send-keys <pane> <key>` — `Escape` for an interrupt, `C-c`, and `Enter` to accept a trust/bypass dialog. The interrupt key and dialog-accept key per harness are unchanged from the tables below; reach for `herdr pane send-keys` instead of `tmux send-keys` when the target's backend is herdr.
 
 ## Detection
 
