@@ -7,7 +7,8 @@
 #   1. fm_be_agent_status maps herdr's native pane agent_status through unchanged
 #      (idle/working/blocked/done/unknown), reports "none" for a gone pane, and
 #      "unknown" when the field is absent.
-#   2. fm_be_pane_cwd extracts .cwd (falling back to .foreground_cwd).
+#   2. fm_be_pane_cwd extracts .foreground_cwd (the active subshell dir, matching
+#      tmux #{pane_current_path}), falling back to .cwd when no foreground subshell.
 #   3. fm_be_pane_alive reflects `pane get` exit; fm_pane_is_busy == working.
 #   4. fm_be_create_window reuses/creates the shared workspace, creates a tab,
 #      renames the pane, echoes the pane_id, and rejects a duplicate label.
@@ -126,16 +127,22 @@ test_agent_status_mapping() {
 test_pane_cwd_and_alive() {
   local home fb got
   home=$(herdr_home cwd); fb=$(make_fake_herdr "$TMP_ROOT/cwd")
-  got=$( unset FM_CREW_BACKEND; export FM_HOME="$home" PATH="$fb:$PATH" FM_FAKE_CWD=/the/worktree
+  # Regression guard for the spawn worktree-detection bug: after `treehouse get`
+  # opens a subshell into the worktree, the pane's base .cwd stays the project dir
+  # (login shell) while the active subshell's dir is reported in .foreground_cwd.
+  # fm_be_pane_cwd must return the foreground (worktree) value to match tmux's
+  # #{pane_current_path}, otherwise fm-spawn's wait loop never sees the worktree.
+  got=$( unset FM_CREW_BACKEND
+         export FM_HOME="$home" PATH="$fb:$PATH" \
+                FM_FAKE_CWD=/the/project FM_FAKE_FGCWD=/the/worktree
          . "$DISPATCH" >/dev/null 2>&1; fm_be_pane_cwd w1:p2 )
-  [ "$got" = /the/worktree ] || fail "pane_cwd should return .cwd, got '$got'"
-  # .cwd absent -> fall back to .foreground_cwd.
-  got=$( unset FM_CREW_BACKEND; export FM_HOME="$home" PATH="$fb:$PATH" FM_FAKE_NO_STATUS=1 FM_FAKE_CWD=""
-         . "$DISPATCH" >/dev/null 2>&1
-         # NO_STATUS path omits foreground_cwd; emulate a cwd-less pane via DEAD-free get
-         fm_be_pane_cwd w1:p2 )
-  # (NO_STATUS pane has empty cwd and no foreground_cwd -> empty; just assert no crash.)
-  : "${got=}"
+  [ "$got" = /the/worktree ] \
+    || fail "pane_cwd should return .foreground_cwd (worktree), got '$got'"
+  # .foreground_cwd absent -> fall back to .cwd (a pane with no foreground subshell).
+  got=$( unset FM_CREW_BACKEND; export FM_HOME="$home" PATH="$fb:$PATH" FM_FAKE_NO_STATUS=1 FM_FAKE_CWD=/only/base
+         . "$DISPATCH" >/dev/null 2>&1; fm_be_pane_cwd w1:p2 )
+  [ "$got" = /only/base ] \
+    || fail "pane_cwd should fall back to .cwd when foreground_cwd absent, got '$got'"
 
   # alive reflects pane get exit.
   ( unset FM_CREW_BACKEND; export FM_HOME="$home" PATH="$fb:$PATH"
