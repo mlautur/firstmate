@@ -50,7 +50,9 @@ Absent, `default`, or `tmux` all select the tmux backend ([`bin/fm-tmux-lib.sh`]
 [`bin/fm-backend-lib.sh`](../bin/fm-backend-lib.sh) is the dispatcher: it resolves the name (`FM_CREW_BACKEND` env override wins, then the file, then the default), sources exactly one backend lib behind the stable `fm_be_*` seam, and fails the source loudly on an unknown name.
 The default tmux backend is a drop-in for a direct source of `fm-tmux-lib.sh`, so leaving this unset changes no behavior.
 The herdr backend implements the `fm_be_*` pane primitives against herdr's socket API (v0.7.0) - pane create/capture/send/kill, native per-pane `agent_status` for turn-end detection, and verified submit - mirroring the tmux backend's contract for the claude harness.
-The tmux->herdr migration is still in progress: `fm-spawn`/`fm-teardown`/`fm-watch` do not yet drive herdr through the seam, so the default backend remains tmux and the herdr path is dormant until selected.
+The tmux->herdr migration is landing in slices: the crew lifecycle paths now drive crew panes through the seam - `fm-spawn` (window create, `treehouse get`, and brief send), `fm-teardown` (window close), and `fm-watch` (pane reads) - so selecting `herdr` runs the claude crew through it, with the returned herdr pane handle stored in `state/<id>.meta window=`.
+Because herdr reports a native turn-end, `fm-spawn` skips injecting its per-harness turn-end hook when `herdr integration status` reports a current integration for the harness, and installs the hook defensively otherwise so the watcher never loses its turn-end signal.
+The default backend remains tmux, and the surrounding integration (bootstrap tool detection and the harness-adapters knowledge) is still being wired, so the herdr path is opt-in until selected.
 Two knobs tune it: `FM_HERDR_BIN` (the herdr binary, default `herdr`) and `FM_HERDR_WORKSPACE_LABEL` (the shared workspace label, default `firstmate`).
 
 ## Toolchain

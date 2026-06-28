@@ -42,10 +42,16 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
 # Crew pane primitives via the backend dispatcher (config/crew-backend; default
-# tmux). Used here for the worktree-isolation guard's pane-cwd read
-# (fm_be_pane_cwd); the window create/send paths remain inline tmux for now.
+# tmux). Every crew-pane interaction goes through the fm_be_* seam: window create
+# (fm_be_create_window), the treehouse-get and brief-launch sends (fm_be_run_cmd/
+# fm_be_send_text/fm_be_send_key), the worktree-isolation guard's pane-cwd read
+# (fm_be_pane_cwd), and turn-end hook gating. With the default (tmux) backend this
+# is byte-for-byte the historical session/window behavior; with herdr it drives the
+# always-on herdr server (one shared "firstmate" workspace, a tab/pane per task) and
+# stores the pane_id handle in state/<id>.meta window=.
 # shellcheck source=bin/fm-backend-lib.sh
 . "$SCRIPT_DIR/fm-backend-lib.sh"
+BACKEND=$(fm_backend_name)
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -343,24 +349,20 @@ else
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
 
-# Same session when firstmate already runs inside tmux; dedicated session otherwise.
-if [ -n "${TMUX:-}" ]; then
-  SES=$(tmux display-message -p '#S')
-else
-  tmux has-session -t firstmate 2>/dev/null || tmux new-session -d -s firstmate
-  SES=firstmate
-fi
-
+# Create the crewmate's window through the backend seam. The tmux backend reuses
+# firstmate's current session (or a dedicated detached "firstmate" session when
+# outside tmux) and creates a window named fm-<id>; the herdr backend reuses one
+# shared "firstmate" workspace and creates a tab/pane per task. Either way the
+# returned handle (tmux session:window, or herdr pane_id) is the opaque value the
+# watcher and teardown read from state/<id>.meta window=. A duplicate name is
+# refused by the backend (non-zero), matching the historical window-exists guard.
 W="fm-$ID"
-T="$SES:$W"
-if tmux list-windows -t "$SES" -F '#{window_name}' | grep -qx "$W"; then
-  echo "error: window $T already exists" >&2
+if ! T=$(fm_be_create_window "$ID" "$PROJ_ABS" "$W"); then
+  echo "error: could not create crewmate window $W for $ID" >&2
   exit 1
 fi
-
-tmux new-window -d -t "$SES" -n "$W" -c "$PROJ_ABS"
 if [ "$KIND" != secondmate ]; then
-  tmux send-keys -t "$T" 'treehouse get' Enter
+  fm_be_run_cmd "$T" 'treehouse get'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   for _ in $(seq 1 60); do
@@ -405,6 +407,13 @@ fi
 # Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
 # agent finishes a turn. Worktree-resident hooks are kept out of git's view so
 # they never block teardown's dirty check or leak into a commit.
+#
+# Under the herdr backend, herdr reports a NATIVE turn-end (it synthesizes the
+# "done" agent_status on a working->idle transition; report §2d), so firstmate's
+# per-harness hook is redundant and we skip injecting it - PROVIDED herdr's
+# integration for this harness is installed and current. If herdr is the backend
+# but the integration is not current, we install the hook anyway (defensive) and
+# note it, so the watcher never silently loses its turn-end signal.
 TURNEND="$STATE/$ID.turn-ended"
 exclude_path() {
   local rel=$1 EXCL
@@ -413,7 +422,28 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
-if [ "$KIND" != secondmate ]; then
+# herdr_integration_current <harness>: 0 when `herdr integration status` reports a
+# CURRENT integration for <harness> (so herdr emits the native turn-end and the
+# per-harness hook is redundant). Defensive: herdr missing, the probe failing, or a
+# non-"current" state (e.g. "not installed", "outdated") all return non-zero, so the
+# caller falls back to installing the hook as today.
+herdr_integration_current() {  # <harness>
+  local harness=$1 bin=${FM_HERDR_BIN:-herdr}
+  command -v "$bin" >/dev/null 2>&1 || return 1
+  "$bin" integration status 2>/dev/null \
+    | grep -qE "^[[:space:]]*${harness}:[[:space:]]+current([[:space:]]|\$)"
+}
+install_turnend_hook=1
+if [ "$KIND" = secondmate ]; then
+  install_turnend_hook=0
+elif [ "$BACKEND" = herdr ]; then
+  if herdr_integration_current "$HARNESS"; then
+    install_turnend_hook=0
+  else
+    echo "warning: herdr backend active but no current herdr integration for harness '$HARNESS'; installing turn-end hook as a fallback" >&2
+  fi
+fi
+if [ "$install_turnend_hook" = 1 ]; then
   case "$HARNESS" in
     claude*)
       mkdir -p "$WT/.claude"
@@ -495,8 +525,8 @@ if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home $LAUNCH"
 fi
-tmux send-keys -t "$T" -l "$LAUNCH"
+fm_be_send_text "$T" "$LAUNCH"
 sleep 0.3
-tmux send-keys -t "$T" Enter
+fm_be_send_key "$T" Enter
 
 echo "spawned $ID harness=$HARNESS kind=$KIND mode=$MODE yolo=$YOLO window=$T worktree=$WT"
