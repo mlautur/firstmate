@@ -41,6 +41,11 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 SUB_HOME_MARKER=".fm-secondmate-home"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
+# Crew pane primitives via the backend dispatcher (config/crew-backend; default
+# tmux). Used here for the worktree-isolation guard's pane-cwd read
+# (fm_be_pane_cwd); the window create/send paths remain inline tmux for now.
+# shellcheck source=bin/fm-backend-lib.sh
+. "$SCRIPT_DIR/fm-backend-lib.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -359,7 +364,7 @@ if [ "$KIND" != secondmate ]; then
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   for _ in $(seq 1 60); do
-    p=$(tmux display-message -p -t "$T" '#{pane_current_path}' 2>/dev/null || true)
+    p=$(fm_be_pane_cwd "$T" || true)
     if [ -n "$p" ] && [ "$p" != "$PROJ_ABS" ]; then
       WT="$p"
       break
