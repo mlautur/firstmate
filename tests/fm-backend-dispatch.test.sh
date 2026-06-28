@@ -6,8 +6,10 @@
 #   1. Default / "default" / "tmux" / absent config all select the tmux backend,
 #      which exposes BOTH the fm_be_* seam and the historical fm_tmux_*/fm_pane_*
 #      names current call sites still call.
-#   2. config/crew-backend=herdr selects the herdr stub, which LOADS cleanly and
-#      then FAILS LOUDLY (non-zero + diagnostic) when any primitive is called.
+#   2. config/crew-backend=herdr selects the herdr backend, which LOADS cleanly
+#      and exposes the same fm_be_* seam + historical names as tmux (the backend's
+#      own behavior is covered by tests/fm-herdr-backend.test.sh; this file only
+#      pins selection + seam wiring).
 #   3. FM_CREW_BACKEND overrides the config file.
 #   4. An unknown backend name fails the source loudly.
 #   5. The NEW tmux fm_be_agent_status maps busy->working, idle->idle, gone->none.
@@ -68,30 +70,35 @@ test_explicit_tmux_and_default_values() {
   pass "config 'tmux', 'default', and empty all resolve to the tmux backend"
 }
 
-# --- 2. herdr loads then fails loudly ---------------------------------------
+# --- 2. herdr loads cleanly and exposes the full seam -----------------------
+# Slice 3 replaced the herdr stub with a real backend; this test now pins that
+# config=herdr selects it, sources cleanly, and exposes the same fm_be_* seam +
+# historical names as tmux. The backend's behavior lives in fm-herdr-backend.test.sh.
 
-test_herdr_selected_and_fails_loudly() {
-  local home name out rc
+test_herdr_selected_and_exposes_seam() {
+  local home name
   home=$(mk_home herdr-home herdr)
   name=$( unset FM_CREW_BACKEND; export FM_HOME="$home"; . "$DISPATCH" >/dev/null 2>&1; fm_backend_name )
   [ "$name" = herdr ] || fail "config=herdr did not select herdr: '$name'"
 
-  # Sourcing must SUCCEED (the stub only defines functions)...
+  # Sourcing must SUCCEED (the lib only defines functions; no herdr call at load).
   ( unset FM_CREW_BACKEND; export FM_HOME="$home"; . "$DISPATCH" ) >/dev/null 2>&1 \
-    || fail "sourcing the herdr stub failed at load time (should defer to call)"
+    || fail "sourcing the herdr backend failed at load time"
 
-  # ...and calling any seam primitive must fail loudly with the diagnostic.
-  out=$( unset FM_CREW_BACKEND; export FM_HOME="$home"; . "$DISPATCH" >/dev/null 2>&1; fm_be_capture w:1 40 2>&1 ); rc=$?
-  [ "$rc" -ne 0 ] || fail "herdr fm_be_capture returned success (should fail loudly)"
-  assert_contains "$out" "herdr backend not yet implemented" \
-    "herdr fm_be_capture lacked the not-implemented diagnostic"
-
-  # A historical-name call must also fail loudly (not 'command not found').
-  out=$( unset FM_CREW_BACKEND; export FM_HOME="$home"; . "$DISPATCH" >/dev/null 2>&1; fm_pane_is_busy w:1 2>&1 ); rc=$?
-  [ "$rc" -ne 0 ] || fail "herdr fm_pane_is_busy returned success (should fail loudly)"
-  assert_contains "$out" "herdr backend not yet implemented" \
-    "herdr fm_pane_is_busy lacked the not-implemented diagnostic"
-  pass "config=herdr loads the stub and every primitive fails loudly"
+  # The herdr backend must define the fm_be_* seam AND the historical names that
+  # current call sites still call directly, exactly like the tmux backend.
+  (
+    unset FM_CREW_BACKEND; export FM_HOME="$home"
+    . "$DISPATCH" >/dev/null 2>&1
+    for f in fm_be_create_window fm_be_window_exists fm_be_resolve fm_be_run_cmd \
+             fm_be_send_text fm_be_send_key fm_be_submit_verify fm_be_capture \
+             fm_be_pane_alive fm_be_pane_cwd fm_be_agent_status fm_be_kill_window \
+             fm_be_composer_state fm_pane_is_busy fm_tmux_submit_core \
+             fm_pane_input_pending fm_tmux_strip_ghost; do
+      type "$f" >/dev/null 2>&1 || { echo "missing: $f" >&2; exit 1; }
+    done
+  ) || fail "herdr backend did not expose the full seam + historical names"
+  pass "config=herdr selects the herdr backend with fm_be_* and fm_tmux_* present"
 }
 
 # --- 3. env override beats the file -----------------------------------------
@@ -159,7 +166,7 @@ test_agent_status_mapping() {
 
 test_default_selects_tmux
 test_explicit_tmux_and_default_values
-test_herdr_selected_and_fails_loudly
+test_herdr_selected_and_exposes_seam
 test_env_override_beats_config
 test_unknown_backend_rejected
 test_agent_status_mapping
