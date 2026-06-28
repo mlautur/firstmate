@@ -30,6 +30,12 @@ mkdir -p "$STATE"
 # has one definition.
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# Crew pane primitives via the backend dispatcher (config/crew-backend; default
+# tmux). The staleness loop reads the pane through fm_be_capture and the busy
+# signature through fm_be_agent_status, so the watcher's wake decisions go through
+# the backend seam while staying byte-identical on the tmux backend.
+# shellcheck source=bin/fm-backend-lib.sh
+. "$SCRIPT_DIR/fm-backend-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -85,9 +91,10 @@ CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
 SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trailing
                                       # signals (a status write, then the same turn's
                                       # turn-end hook) coalesce into one wake
-# Busy signatures per harness, OR-ed. Extend via env when new adapters are verified.
-# claude/codex: "esc to interrupt"; opencode: "esc interrupt"; pi: "Working..."
-BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.'}
+# Busy signatures per harness, OR-ed (claude/codex: "esc to interrupt"; opencode:
+# "esc interrupt"; pi: "Working..."), are owned by the backend seam now: the busy
+# determination in the staleness loop reads fm_be_agent_status, whose tmux backend
+# applies this same regex (overridable via FM_BUSY_REGEX). See bin/fm-tmux-lib.sh.
 # Always-on wake triage: most wakes during a long crew validation are benign
 # (working: notes, bare turn-ended, a crew gone quiet mid-validation, a no-change
 # heartbeat). Rather than wake firstmate's LLM for each, this watcher classifies
@@ -356,7 +363,7 @@ EOF
     # A secondmate idling on its own watcher is healthy. Its parent supervises
     # it through status writes and heartbeats, not pane-idle staleness.
     [ "$(window_kind "$w")" = secondmate ] && continue
-    tail40=$(tmux capture-pane -p -t "$w" -S -40 2>/dev/null) || continue
+    tail40=$(fm_be_capture "$w" 40 2>/dev/null) || continue
     h=$(printf '%s' "$tail40" | hash_pane)
     key=$(printf '%s' "$w" | tr ':/.' '___')
     hf="$STATE/.hash-$key"
@@ -367,10 +374,13 @@ EOF
     if [ "$h" = "$prev" ]; then
       n=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 ))
       echo "$n" > "$cf"
-      # Busy match runs on the last 6 non-blank lines only (the TUI footer area,
-      # where every verified harness renders its busy indicator) so busy-looking
-      # strings in displayed content cannot suppress stale detection.
-      if [ "$n" -ge 2 ] && ! printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -6 | grep -qiE "$BUSY_REGEX"; then
+      # Busy determination goes through the backend seam: fm_be_agent_status
+      # reports "working" iff the busy signature is present (the tmux backend scans
+      # the last 6 non-blank lines of the pane tail - the TUI footer area, where
+      # every verified harness renders its busy indicator - so busy-looking strings
+      # in displayed content cannot suppress stale detection). Not-working (idle or
+      # a vanished pane) means no busy signature, exactly as the inline regex did.
+      if [ "$n" -ge 2 ] && [ "$(fm_be_agent_status "$w")" != working ]; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
         # firstmate. Detection itself is unchanged from above.
         if afk_present; then

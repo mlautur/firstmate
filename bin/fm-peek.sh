@@ -10,6 +10,11 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# Crew pane primitives via the backend dispatcher (config/crew-backend; default
+# tmux). Provides fm_be_resolve (bare-name -> handle) and fm_be_capture.
+# shellcheck source=bin/fm-backend-lib.sh
+. "$SCRIPT_DIR/fm-backend-lib.sh"
+
 "$SCRIPT_DIR/fm-guard.sh" || true
 
 resolve() {
@@ -25,11 +30,10 @@ resolve() {
       [ -n "$window" ] || { echo "error: no window recorded in $meta" >&2; exit 1; }
       echo "$window"
       ;;
-    *) tmux list-windows -a -F '#{session_name}:#{window_name}' | grep -m1 ":$1\$" \
-         || { echo "error: no window named $1" >&2; exit 1; } ;;
+    *) fm_be_resolve "$1" || { echo "error: no window named $1" >&2; exit 1; } ;;
   esac
 }
 
 T=$(resolve "$1")
 N=${2:-40}
-tmux capture-pane -p -t "$T" -S -"$N"
+fm_be_capture "$T" "$N"

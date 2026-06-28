@@ -119,9 +119,11 @@ LOG_VERB=$(log_verb_of "$LOG_LINE")
 # pane_readable is consulted ONLY in the no-run fallback below. The run-step path
 # stays authoritative regardless of pane liveness - judge by the run-step, not the
 # shell - so a finished crew whose window has closed still reports its run-step
-# state (e.g. done) instead of being masked as unknown.
+# state (e.g. done) instead of being masked as unknown. The pane-liveness primitive
+# itself goes through the backend seam (fm_be_pane_alive); the precedence logic here
+# is unchanged.
 pane_readable() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1
+  fm_be_pane_alive "$1"
 }
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
