@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tear down a finished task: return the treehouse worktree or retire a
-# secondmate home, kill the tmux window, clear volatile state, refresh/prune
+# secondmate home, kill the crewmate window/pane (via the config/crew-backend
+# seam - tmux kill-window or herdr pane close), clear volatile state, refresh/prune
 # the project's clone for PR-based ship tasks, then print a backlog-refresh
 # reminder.
 # REFUSES if the worktree holds work that has not LANDED, because treehouse return
@@ -43,6 +44,12 @@ SECONDMATE_REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# Crew pane primitives via the backend dispatcher (config/crew-backend; default
+# tmux). Used here to kill the task's window/pane through fm_be_kill_window; with
+# the default (tmux) backend this is exactly `tmux kill-window`, with herdr it is
+# `herdr pane close`.
+# shellcheck source=bin/fm-backend-lib.sh
+. "$SCRIPT_DIR/fm-backend-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 ID=$1
 FORCE=${2:-}
@@ -443,7 +450,7 @@ cleanup_firstmate_home_children() {
     child_kind=$(meta_value "$child_meta" kind)
     [ -n "$child_kind" ] || child_kind=ship
     if [ -n "$child_t" ]; then
-      tmux kill-window -t "$child_t" 2>/dev/null || true
+      fm_be_kill_window "$child_t" 2>/dev/null || true
     fi
     if [ "$child_kind" = secondmate ]; then
       child_home=$(meta_value "$child_meta" home)
@@ -574,7 +581,7 @@ if [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   ( cd "$PROJ" && treehouse return --force "$WT" )
 fi
 
-tmux kill-window -t "$T" 2>/dev/null || true
+fm_be_kill_window "$T" 2>/dev/null || true
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID"
