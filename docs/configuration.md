@@ -49,7 +49,9 @@ The local, gitignored `config/crew-backend` file selects which terminal-multiple
 Absent, `default`, or `tmux` all select the tmux backend ([`bin/fm-tmux-lib.sh`](../bin/fm-tmux-lib.sh)); `herdr` selects the herdr backend ([`bin/fm-herdr-lib.sh`](../bin/fm-herdr-lib.sh)).
 [`bin/fm-backend-lib.sh`](../bin/fm-backend-lib.sh) is the dispatcher: it resolves the name (`FM_CREW_BACKEND` env override wins, then the file, then the default), sources exactly one backend lib behind the stable `fm_be_*` seam, and fails the source loudly on an unknown name.
 The default tmux backend is a drop-in for a direct source of `fm-tmux-lib.sh`, so leaving this unset changes no behavior.
-The herdr backend is a stub at this stage of the tmux->herdr migration: selecting it loads cleanly and then fails loudly the moment any pane primitive is called.
+The herdr backend implements the `fm_be_*` pane primitives against herdr's socket API (v0.7.0) - pane create/capture/send/kill, native per-pane `agent_status` for turn-end detection, and verified submit - mirroring the tmux backend's contract for the claude harness.
+The tmux->herdr migration is still in progress: `fm-spawn`/`fm-teardown`/`fm-watch` do not yet drive herdr through the seam, so the default backend remains tmux and the herdr path is dormant until selected.
+Two knobs tune it: `FM_HERDR_BIN` (the herdr binary, default `herdr`) and `FM_HERDR_WORKSPACE_LABEL` (the shared workspace label, default `firstmate`).
 
 ## Toolchain
 
@@ -100,7 +102,9 @@ FM_STATE_OVERRIDE=       # alternate state dir, mainly for tests
 FM_DATA_OVERRIDE=        # alternate data dir, mainly for tests
 FM_PROJECTS_OVERRIDE=    # alternate projects dir, mainly for tests
 FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
-FM_CREW_BACKEND=        # crew terminal backend override; beats config/crew-backend; absent/default/tmux = tmux, herdr = herdr stub
+FM_CREW_BACKEND=        # crew terminal backend override; beats config/crew-backend; absent/default/tmux = tmux, herdr = herdr backend
+FM_HERDR_BIN=herdr      # herdr binary the herdr backend invokes; overridable for tests and multi-home isolation
+FM_HERDR_WORKSPACE_LABEL=firstmate   # shared herdr workspace label the herdr backend maps tasks into
 FM_POLL=15              # seconds between watcher poll cycles
 FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
