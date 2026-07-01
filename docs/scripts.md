@@ -36,7 +36,7 @@ Each file also starts with a short header comment.
 | `fm-herdr-lib.sh`        | herdr backend behind the crew-pane seam: pane create/capture/send/kill and native per-pane `agent_status` against herdr's socket API, plus verified submit, implementing the same `fm_be_*` seam and historical names as tmux (claude harness only); dormant until `config/crew-backend=herdr` |
 | `fm-peek.sh`             | Print a bounded tail of a crewmate pane                                                                             |
 | `fm-pr-check.sh`         | Record `pr=` and GitHub's `pr_head=` when available for a PR-ready task, then arm the watcher's merge poll          |
-| `fm-pr-merge.sh`         | Record `pr=` and available `pr_head=` via `fm-pr-check.sh`, then merge the task PR through `gh-axi pr merge` with any extra flags |
+| `fm-pr-merge.sh`         | Require a full GitHub PR URL, record `pr=` and available `pr_head=` via `fm-pr-check.sh`, parse it into `gh-axi pr merge <n> --repo <owner>/<repo>`, default to `--squash` unless a merge method is forwarded, and reject malformed URLs or repo overrides |
 | `fm-promote.sh`          | Promote a scout task in place so it becomes a protected ship task                                                   |
 | `fm-teardown.sh`         | Return a clean, landed ship worktree or retire/release a secondmate home; requires scout reports, checks child work, removes firstmate-owned hook artifacts, and prints the backend-aware backlog reminder |
 | `fm-harness.sh`          | Detect the running harness; resolve the effective crewmate (`crew`) or secondmate-launch (`secondmate`) harness     |
