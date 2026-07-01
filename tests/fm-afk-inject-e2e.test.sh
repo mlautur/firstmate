@@ -27,6 +27,11 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$ROOT/bin/fm-supervise-daemon.sh"
 
+# Pin the tmux backend: this e2e fakes tmux end to end, so pane reads (self-check
+# and daemon) must use the tmux seam regardless of the operator's local, gitignored
+# config/crew-backend, which would otherwise leak in and route to a real herdr.
+export FM_CREW_BACKEND=tmux
+
 # Skip gracefully if tmux is not installed.
 command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
 

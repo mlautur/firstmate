@@ -36,13 +36,14 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
   `AGENTS.md` is the agent's main job description and names when to load bundled skills; `CLAUDE.md` is a symlink to it, and `.claude/skills` is a symlink to `.agents/skills`.
 - Only shared material is tracked: `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, and `.agents/skills/`.
   Everything personal to one captain's fleet (`.env`, `data/`, `state/`, `config/`, `projects/`, `.no-mistakes/`) is gitignored; never commit it.
-  The root `.tasks.toml` is tracked `tasks-axi` config for `data/backlog.md`; compatible `tasks-axi` uses it for routine backlog mutations.
+  The root `.tasks.toml` is tracked `tasks-axi` config for `data/backlog.md`; compatible `tasks-axi` is the default backend for routine backlog mutations.
+  A local `config/backlog-backend=manual` opt-out forces hand-editing and stays gitignored.
   It does not make `data/` tracked.
 - Helper scripts in `bin/` are plain bash.
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Test scripts and helpers in `tests/` are plain bash too.
   `shellcheck bin/*.sh tests/*.sh` must pass, and CI enforces it.
-- Changes to harness adapters (launch templates in `bin/fm-spawn.sh`, facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
+- Changes to harness adapters (detection in `bin/fm-harness.sh`, launch and hook mechanics in `bin/fm-spawn.sh`, busy signatures in `bin/fm-watch.sh` and `bin/fm-tmux-lib.sh`, cleanup in `bin/fm-teardown.sh`, and facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
 - In Markdown, put each full sentence on its own line.
 
 ## Development
@@ -51,14 +52,14 @@ Tracked changes to firstmate itself - `AGENTS.md`, `README.md`, `CONTRIBUTING.md
 When supervising live crewmates, keep firstmate's own long validation or build commands in the background so watcher wakes can still be handled.
 Crewmate validation follows the installed no-mistakes version's SKILL.md and live `axi` help instead of duplicating gate mechanics in firstmate docs.
 Firstmate's wrapper still matters: `ask-user` findings route to the captain through firstmate, and crewmates avoid `--yes` because it silently resolves captain-owned decisions without escalation.
-Local `.no-mistakes/` state and test evidence stay out of this repo; `.no-mistakes.yaml` keeps evidence in a temp directory instead.
+Local `.no-mistakes/` state and test evidence stay out of this repo; `.no-mistakes.yaml` keeps evidence in a temp directory and pins the gate's test command to the same bash behavior suite as CI.
 
 Check and test the toolbelt before pushing:
 
 ```sh
 bash -n bin/*.sh                          # syntax-check the toolbelt
 shellcheck bin/*.sh tests/*.sh            # lint the toolbelt and behavior tests; CI enforces this
-for test_script in tests/*.test.sh; do "$test_script"; done   # behavior tests, matching CI
+for test_script in tests/*.test.sh; do bash "$test_script"; done   # behavior tests, matching CI and no-mistakes commands.test
 tests/fm-wake-queue.test.sh               # durable wake queue losslessness, catch-up, double-drain, duplicate-collapse, and drain liveness guard tests
 tests/fm-watcher-lock.test.sh             # watcher singleton, lock-race, watch-arm liveness, and guard-warning tests
 tests/fm-watch-triage.test.sh             # always-on watcher triage: benign absorb, actionable surface, stale wedge threshold, heartbeat backstop, and afk one-shot coherence
@@ -69,16 +70,21 @@ tests/fm-send-secondmate-marker.test.sh   # fm-send from-firstmate marker for ki
 tests/fm-wake-daemon-lifecycle-e2e.test.sh # watcher + daemon lifecycle e2e: restart catch-up, batching, dedupe, stale-pane routing, and digest injection
 tests/fm-composer-ghost.test.sh           # dim-ghost stripping, ghost-only composer detection, and escape-free peek tests
 tests/fm-afk-inject-e2e.test.sh           # private-socket end-to-end test of the afk injection path (partial-input deferral, swallowed-Enter retry)
-tests/fm-bootstrap.test.sh                # bootstrap dependency and feature-probe tests
-tests/fm-x-mode.test.sh                   # X-mode poll, inbox context round-trip, reply threading, dry-run preview, and .env-presence activation tests
+tests/fm-bootstrap.test.sh                # bootstrap dependency, feature-probe, and crew-dispatch reporting tests
+tests/fm-grok-harness.test.sh             # grok adapter spawn hook, token guard, teardown cleanup, and session-lock detection tests
+tests/fm-fleet-sync.test.sh               # project clone refresh: safe detached recovery, STUCK drift reports, benign skips, and bootstrap relay
+tests/fm-x-mode.test.sh                   # X-mode poll, inbox context round-trip, reply threading, dismiss, dry-run preview, and .env-presence activation tests
 tests/fm-tangle-guard.test.sh             # primary-checkout tangle detection and spawn/brief isolation tests
 tests/fm-brief.test.sh                    # fm-brief.sh bash -n parse guard (read -d '' DoD heredocs vs the command-substitution apostrophe quirk) and per-mode brief scaffolding
 tests/fm-spawn-batch.test.sh              # batch dispatch and FM_HOME project-path scoping tests
+tests/fm-spawn-dispatch-profile.test.sh   # concrete dispatch profile flags: active-profile backstop, harness/model/effort meta, launch templates, batch forwarding, and secondmate exemption
 tests/fm-update.test.sh                   # fast-forward-only self-update, reread, nudge, dedup, and skip-safety tests
 tests/fm-secondmate-sync.test.sh          # local-HEAD secondmate sync, no-fetch, bootstrap nudge gating, and spawn hook tests
+tests/fm-secondmate-harness.test.sh       # secondmate-vs-crewmate harness resolution, primary-to-secondmate config inheritance, and config-push tests
 tests/fm-secondmate-lifecycle-e2e.test.sh # persistent secondmate routing, seeding, backlog handoff, spawn, recovery, teardown, and FM_HOME flow tests
 tests/fm-secondmate-safety.test.sh        # secondmate home safety, idle charter, handoff validation, and teardown boundary tests
-tests/fm-teardown.test.sh                 # fm-teardown.sh landed-work safety and reminder checks: fork-remote allow, squash/content landings, dirty and unlanded refusals, PR-head metadata, tasks-axi reminder, --force override
+tests/fm-teardown.test.sh                 # fm-teardown.sh landed-work safety and reminder checks: fork-remote allow, squash/content landings, dirty and unlanded refusals, PR-head metadata, no-pr= branch discovery, tasks-axi/manual backlog reminder, --force override
+tests/fm-pr-merge.test.sh                 # fm-pr-merge.sh records pr= and available pr_head= before merging, propagates real merge failures, and forwards extra gh-axi pr merge flags
 tests/fm-crew-state.test.sh               # fm-crew-state.sh current-state reconciliation: run-step authority including closed panes, stale needs-decision/blocked superseded by a resumed run, genuine-parked, cross-branch attribution, pane/status-log fallback, scout skip, torn-down/missing-meta graceful
 tests/fm-backend-dispatch.test.sh         # crew backend dispatcher: config/crew-backend selection, FM_CREW_BACKEND override, default/tmux seam wiring, herdr backend selection + full seam exposure, unknown-backend rejection, fm_be_agent_status mapping
 tests/fm-herdr-backend.test.sh            # herdr backend fm_be_* implementation against a fake herdr CLI: native agent_status mapping, pane cwd/alive/busy, window create/resolve/exists, capture format+cap, kill, and submit-verify tokens; live round-trip gated behind FM_HERDR_LIVE=1

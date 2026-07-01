@@ -181,7 +181,10 @@ test_hook_installed_when_integration_absent() {
 
   assert_present "$wt/.claude/settings.local.json" \
     "the turn-end hook must be installed defensively when no current herdr integration exists"
-  assert_grep "$home/state/$id.turn-ended" "$wt/.claude/settings.local.json" \
+  # spawn canonicalizes the state dir (STATE_REAL=$(cd "$STATE" && pwd -P)) before
+  # composing the turn-ended path, so resolve $home/state the same way to match.
+  state_real=$(cd "$home/state" && pwd -P)
+  assert_grep "$state_real/$id.turn-ended" "$wt/.claude/settings.local.json" \
     "the fallback hook should touch the task's turn-ended file"
   assert_contains "$out" "installing turn-end hook as a fallback" \
     "spawn should note the defensive hook fallback when the integration is not current"
